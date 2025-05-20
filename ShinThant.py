@@ -1,0 +1,228 @@
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
+from kivy.uix.button import Button
+from kivy.uix.popup import Popup
+from kivy.uix.gridlayout import GridLayout
+from kivy.core.window import Window
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.image import Image
+import sqlite3
+from datetime import datetime
+
+class ShinThantApp(App):
+    def build(self):
+        self.initialize_database()
+
+        self.main_layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+
+        # ✅ Logo image
+        self.logo = Image(source='logo.png', size_hint=(1, 0.3))
+        self.main_layout.add_widget(self.logo)
+
+        # Title
+        self.title_label = Label(text="Shin Tant Store", font_size=30, size_hint=(1, 0.1))
+        self.main_layout.add_widget(self.title_label)
+
+        # Input Fields
+        input_layout = GridLayout(cols=2, spacing=10, size_hint=(1, 0.3))
+
+        input_layout.add_widget(Label(text="Product Name:"))
+        self.product_input = TextInput(multiline=False)
+        input_layout.add_widget(self.product_input)
+
+        input_layout.add_widget(Label(text="Quantity"))
+        self.quantity_input = TextInput(multiline=False, input_filter='float')
+        input_layout.add_widget(self.quantity_input)
+
+        input_layout.add_widget(Label(text="Price (MMK):"))
+        self.price_input = TextInput(multiline=False, input_filter='float')
+        input_layout.add_widget(self.price_input)
+
+        self.main_layout.add_widget(input_layout)
+
+        # Buttons
+        button_layout = BoxLayout(spacing=10, size_hint=(1, 0.2))
+
+        self.save_btn = Button(text="Save Record")
+        self.save_btn.bind(on_press=self.save_sale)
+
+        self.view_btn = Button(text="View Records")
+        self.view_btn.bind(on_press=self.view_sales)
+
+        self.report_btn = Button(text="Generate Report")
+        self.report_btn.bind(on_press=self.generate_report)
+
+        button_layout.add_widget(self.save_btn)
+        button_layout.add_widget(self.view_btn)
+        button_layout.add_widget(self.report_btn)
+
+        self.main_layout.add_widget(button_layout)
+
+        return self.main_layout
+
+    def initialize_database(self):
+        self.conn = sqlite3.connect('ShinThant.db')
+        self.cursor = self.conn.cursor()
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sales (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_name TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                price REAL NOT NULL,
+                sale_date TEXT NOT NULL,
+                total_amount REAL GENERATED ALWAYS AS (quantity * price) STORED
+            )
+        ''')
+        self.conn.commit()
+
+    def save_sale(self, instance):
+        product = self.product_input.text.strip()
+        quantity = self.quantity_input.text.strip()
+        price = self.price_input.text.strip()
+        sale_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if not product or not quantity or not price:
+            self.show_popup("Warning", "Please fill in all fields")
+            return
+
+        try:
+            self.cursor.execute('''
+                INSERT INTO sales (product_name, quantity, price, sale_date)
+                VALUES (?, ?, ?, ?)
+            ''', (product, float(quantity), float(price), sale_date))
+            self.conn.commit()
+
+            self.show_popup("Success", "Sales record saved successfully")
+
+            self.product_input.text = ""
+            self.quantity_input.text = ""
+            self.price_input.text = ""
+        except ValueError:
+            self.show_popup("Error", "Please enter valid numbers for quantity and price")
+        except Exception as e:
+            self.show_popup("Error", f"Database error:\n{str(e)}")
+
+    def view_sales(self, instance):
+        self.cursor.execute('SELECT * FROM sales ORDER BY sale_date DESC')
+        sales = self.cursor.fetchall()
+
+        layout = BoxLayout(orientation='vertical', spacing=10)
+        scroll_layout = GridLayout(cols=1, spacing=10, size_hint_y=None)
+        scroll_layout.bind(minimum_height=scroll_layout.setter('height'))
+
+        if sales:
+            for sale in sales:
+                sale_box = BoxLayout(orientation='vertical', size_hint_y=None, height=150, padding=5)
+                sale_text = (
+                    f"[b]ID:[/b] {sale[0]}\n"
+                    f"[b]Product:[/b] {sale[1]}\n"
+                    f"[b]Quantity:[/b] {sale[2]:.2f}\n"
+                    f"[b]Price:[/b] {sale[3]:,.2f} MMK\n"
+                    f"[b]Total:[/b] {sale[5]:,.2f} MMK\n"
+                    f"[b]Date:[/b] {sale[4]}"
+                )
+                sale_label = Label(text=sale_text, markup=True, halign='left', valign='top')
+                sale_label.text_size = (Window.width - 100, None)
+                sale_box.add_widget(sale_label)
+
+                delete_btn = Button(text="Delete", size_hint_y=None, height=30)
+                delete_btn.bind(on_press=lambda x, sale_id=sale[0]: self.delete_sale(sale_id))
+                sale_box.add_widget(delete_btn)
+
+                scroll_layout.add_widget(sale_box)
+        else:
+            scroll_layout.add_widget(Label(text="No sales records found", size_hint_y=None, height=50))
+
+        scroll_view = ScrollView()
+        scroll_view.add_widget(scroll_layout)
+
+        layout.add_widget(scroll_view)
+
+        close_btn = Button(text="Close", size_hint=(1, 0.1))
+        popup = Popup(title="Sales Records", size_hint=(0.9, 0.9))
+        close_btn.bind(on_press=popup.dismiss)
+        layout.add_widget(close_btn)
+        popup.content = layout
+        popup.open()
+
+    def delete_sale(self, sale_id):
+        self.cursor.execute('DELETE FROM sales WHERE id = ?', (sale_id,))
+        self.conn.commit()
+        self.show_popup("Deleted", "Record deleted successfully")
+
+    def generate_report(self, instance):
+        try:
+            self.cursor.execute('SELECT COUNT(*), SUM(total_amount) FROM sales')
+            total_sales, total_amount = self.cursor.fetchone()
+
+            self.cursor.execute('''
+                SELECT product_name, SUM(quantity), SUM(total_amount)
+                FROM sales
+                GROUP BY product_name
+                ORDER BY SUM(total_amount) DESC
+            ''')
+            product_summary = self.cursor.fetchall()
+
+            layout = BoxLayout(orientation='vertical', spacing=10)
+            scroll_layout = GridLayout(cols=1, spacing=10, size_hint_y=None)
+            scroll_layout.bind(minimum_height=scroll_layout.setter('height'))
+
+            summary_text = (
+                f"[b]Sales Report[/b]\n\n"
+                f"[b]Total Transactions:[/b] {total_sales or 0}\n"
+                f"[b]Total Revenue:[/b] {total_amount or 0:,.2f} MMK\n\n"
+                f"[b]Product Summary:[/b]"
+            )
+            summary_label = Label(text=summary_text, markup=True, size_hint_y=None, height=150,
+                                  halign='left', valign='top')
+            summary_label.text_size = (Window.width - 100, None)
+            scroll_layout.add_widget(summary_label)
+
+            if product_summary:
+                for product in product_summary:
+                    product_text = (
+                        f"[b]{product[0]}[/b]\n"
+                        f"Total Sold: {product[1]:.2f}\n"
+                        f"Total Revenue: {product[2]:,.2f} MMK\n"
+                    )
+                    product_label = Label(text=product_text, markup=True, size_hint_y=None, height=90,
+                                          halign='left', valign='top')
+                    product_label.text_size = (Window.width - 100, None)
+                    scroll_layout.add_widget(product_label)
+            else:
+                scroll_layout.add_widget(Label(text="No sales data available", size_hint_y=None, height=50))
+
+            scroll_view = ScrollView()
+            scroll_view.add_widget(scroll_layout)
+
+            layout.add_widget(scroll_view)
+
+            close_btn = Button(text="Close", size_hint=(1, 0.1))
+
+            popup = Popup(title="Sales Report", size_hint=(0.9, 0.9))
+            close_btn.bind(on_press=popup.dismiss)
+            layout.add_widget(close_btn)
+            popup.content = layout
+            popup.open()
+
+        except Exception as e:
+            self.show_popup("Error", f"Failed to generate report:\n{str(e)}")
+
+    def show_popup(self, title, message):
+        content = BoxLayout(orientation='vertical', padding=10)
+        content.add_widget(Label(text=message))
+        btn = Button(text="OK", size_hint=(1, 0.2))
+        popup = Popup(title=title, size_hint=(0.6, 0.4))
+        btn.bind(on_press=popup.dismiss)
+        content.add_widget(btn)
+        popup.content = content
+        popup.open()
+
+    def on_stop(self):
+        self.conn.close()
+
+if __name__ == "__main__":
+    Window.size = (360, 640)  # Android portrait size
+    ShinThantApp().run()
